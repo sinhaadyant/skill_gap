@@ -22,9 +22,10 @@
     "types": [
       "node"
     ],
+    "baseUrl": ".",
     "paths": {
       "@/*": [
-        "*"
+        "./*"
       ]
     },
     "plugins": [
