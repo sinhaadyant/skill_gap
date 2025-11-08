@@ -1,0 +1,876 @@
+# Spring Boot (Advanced) Interview Guide
+
+---
+
+## 1. Bootstrapping & Starter Architecture
+
+### Concept Brief
+
+Spring Boot accelerates setup through starter dependencies (`spring-boot-starter-web`, `spring-boot-starter-data-jpa`) and convention-over-configuration defaults. The `@SpringBootApplication` annotation bundles component scanning, auto-configuration, and property support.
+
+### Benefits
+
+- **Speed**: Minimal boilerplate to launch a production-ready service.
+- **Consistency**: Starters encapsulate compatible versions of libraries.
+- **Maintainability**: Auto-updates via Gradle/Maven BOMs keep dependencies aligned.
+
+### Practical Walkthrough
+
+```java
+@SpringBootApplication
+public class BhopalOrderApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(BhopalOrderApplication.class, args);
+    }
+}
+```
+
+```xml
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-dependencies</artifactId>
+      <version>3.3.2</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+```
+
+### Follow-Up Questions
+
+- How do you choose between `spring-boot-starter-web` and `spring-boot-starter-webflux`?
+- What happens during `SpringApplication.run()` bootstrapping?
+- How do you override default logging, banner, or command-line args?
+
+---
+
+## 2. Auto-Configuration & Conditional Beans
+
+### Concept Brief
+
+Auto-configuration inspects the classpath and application properties to create beans automatically. Conditional annotations (`@ConditionalOnClass`, `@ConditionalOnProperty`) drive these decisions.
+
+### Benefits
+
+- **Productivity**: No need for manual bean wiring for common infrastructure.
+- **Flexibility**: Easily override auto-configured beans with custom implementations.
+- **Scalability**: Build region-specific modules that activate only in Bhopal profiles.
+
+### Practical Walkthrough
+
+```java
+@Configuration
+@ConditionalOnClass({RedisTemplate.class, ObjectMapper.class})
+@ConditionalOnProperty(prefix = "bhopal.cache", name = "enabled", havingValue = "true")
+public class LoyaltyCacheAutoConfig {
+
+    @Bean
+    public RedisTemplate<String, LoyaltySnapshot> loyaltyRedisTemplate(
+            RedisConnectionFactory factory, ObjectMapper mapper) {
+        RedisTemplate<String, LoyaltySnapshot> template = new RedisTemplate<>();
+        template.setConnectionFactory(factory);
+        template.setValueSerializer(new Jackson2JsonRedisSerializer<>(mapper, LoyaltySnapshot.class));
+        return template;
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you debug which auto-configuration classes loaded (`--debug`, `ConditionEvaluationReport`)?
+- When would you disable specific auto-configurations (`spring.autoconfigure.exclude`)?
+- How do you package custom auto-config modules for shared libraries?
+
+---
+
+## 3. Configuration Properties & Validation
+
+### Concept Brief
+
+`@ConfigurationProperties` binds hierarchical properties to typed classes. Validation annotations enforce correctness during bootstrap.
+
+### Benefits
+
+- **Type Safety**: Catch invalid configuration at startup.
+- **Centralization**: Group environment-specific settings per feature.
+- **Testability**: `@TestPropertySource` and `@DynamicPropertySource` simulate profiles.
+
+### Practical Walkthrough
+
+```yaml
+bhopal:
+  settlement:
+    cutoff-time: "21:00"
+    retry:
+      attempts: 3
+      delay: 10s
+```
+
+```java
+@ConfigurationProperties(prefix = "bhopal.settlement")
+@Validated
+public record SettlementProperties(
+    @NotBlank String cutoffTime,
+    RetryProperties retry) {
+
+    public record RetryProperties(
+        @Min(1) int attempts,
+        Duration delay) { }
+}
+
+@Configuration
+@EnableConfigurationProperties(SettlementProperties.class)
+public class SettlementConfig { }
+```
+
+### Follow-Up Questions
+
+- How do you bind lists/maps and handle relaxed binding in YAML?
+- When do you use `@ConstructorBinding` vs setters?
+- How do you encrypt sensitive properties (Jasypt, Vault, AWS KMS)?
+
+---
+
+## 4. Bean Lifecycle, Events & Application Context
+
+### Concept Brief
+
+Beans travel through lifecycle phases: instantiation, dependency injection, initialization (`@PostConstruct`), destruction (`@PreDestroy`). Application events (`ApplicationReadyEvent`) signal context milestones.
+
+### Benefits
+
+- **Hook Points**: Initialize caches or run migrations at the right moment.
+- **Observability**: Emit metrics when the context refreshes in Bhopal pods.
+- **Diagnostics**: Custom `ApplicationRunner` / `CommandLineRunner` for health checks.
+
+### Practical Walkthrough
+
+```java
+@Component
+public class BhopalStartupRunner implements ApplicationRunner {
+    @Override
+    public void run(ApplicationArguments args) {
+        log.info("Bhopal service started with profiles {}", Arrays.toString(args.getSourceArgs()));
+    }
+}
+
+@Component
+public class CacheWarmupListener {
+    @EventListener(ApplicationReadyEvent.class)
+    public void warmup() {
+        preloadService.refreshAll();
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you detect circular dependencies during lifecycle?
+- When would you implement `BeanPostProcessor`?
+- How do you manage graceful shutdown hooks in Kubernetes?
+
+---
+
+## 5. Component Scanning & Dependency Injection Fundamentals
+
+### Concept Brief
+
+Component scanning finds beans annotated with stereotype annotations (`@Component`, `@Service`). Constructor injection is preferred for immutability and testability.
+
+### Benefits
+
+- **Consistency**: Clear layering (controller-service-repository) for Bhopal squads.
+- **Testability**: Mandatory dependencies enforced via constructors.
+- **Maintainability**: Qualifiers and custom annotations guide bean selection.
+
+### Practical Walkthrough
+
+```java
+@Service
+public class InvoiceService {
+
+    private final PricingService pricingService;
+    private final TaxService taxService;
+
+    public InvoiceService(PricingService pricingService, TaxService taxService) {
+        this.pricingService = pricingService;
+        this.taxService = taxService;
+    }
+}
+
+@Configuration
+@ComponentScan(basePackages = "com.bhopal")
+public class AppConfig { }
+```
+
+### Follow-Up Questions
+
+- When do you use `@Primary`, `@Qualifier`, or custom annotations?
+- How do you structure multi-module projects to avoid component scan bleed?
+- How do you inject prototype-scoped beans into singletons safely?
+
+---
+
+## 6. Spring MVC Fundamentals (Controllers, Validation, Exception Handling)
+
+### Concept Brief
+
+Spring MVC handles HTTP requests via annotated controllers. `@RequestMapping` (or composed annotations) configure routes, while validation ensures payload integrity.
+
+### Benefits
+
+- **Clarity**: Declarative mapping of Bhopal APIs.
+- **Validation**: Automatic constraint enforcement via `@Valid`.
+- **Extensibility**: Handler interceptors add cross-cutting behavior.
+
+### Practical Walkthrough
+
+```java
+@RestController
+@RequestMapping("/bhopal/customers")
+public class CustomerController {
+
+    private final CustomerService service;
+
+    public CustomerController(CustomerService service) {
+        this.service = service;
+    }
+
+    @PostMapping
+    public ResponseEntity<CustomerDto> create(@Valid @RequestBody CustomerRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.create(request));
+    }
+}
+```
+
+```java
+public record CustomerRequest(
+    @NotBlank String name,
+    @Email String email,
+    @Pattern(regexp = "\\d{10}") String phone) { }
+```
+
+### Follow-Up Questions
+
+- How do you customize message interpolation for validation errors?
+- When would you use `HandlerMethodArgumentResolver`?
+- How do you implement content negotiation (JSON vs XML)?
+
+---
+
+## 7. Spring Data JPA & Transaction Management
+
+### Concept Brief
+
+Spring Data repositories abstract CRUD operations, while `@Transactional` manages unit-of-work boundaries. Entity graphs, projections, and specifications tailor queries.
+
+### Benefits
+
+- **Productivity**: Generate repositories with minimal boilerplate.
+- **Consistency**: Declarative transactions reduce accidental data loss.
+- **Testability**: Slice tests (`@DataJpaTest`) validate persistence logic.
+
+### Practical Walkthrough
+
+```java
+public interface OrderRepository extends JpaRepository<OrderEntity, String> {
+
+    @EntityGraph(attributePaths = {"items", "payments"})
+    Page<OrderEntity> findByRegion(String region, Pageable pageable);
+}
+
+@Service
+public class OrderService {
+
+    private final OrderRepository repository;
+
+    public OrderService(OrderRepository repository) {
+        this.repository = repository;
+    }
+
+    @Transactional
+    public OrderDto confirm(String orderId) {
+        OrderEntity entity = repository.findById(orderId)
+            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        entity.confirm();
+        return OrderDto.from(entity);
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you handle transaction propagation across service boundaries?
+- When do you use optimistic locking (`@Version`) vs pessimistic?
+- How do you map native queries to DTO projections safely?
+
+---
+
+## 8. Caching Strategies (Spring Cache, Redis, Caffeine)
+
+### Concept Brief
+
+Spring Cache abstracts caching via annotations (`@Cacheable`, `@CacheEvict`). Backing stores include in-memory (Caffeine) or distributed (Redis).
+
+### Benefits
+
+- **Performance**: Reduce database load for frequently accessed Bhopal catalog.
+- **Consistency**: Control eviction and TTL to avoid stale data.
+- **Observability**: Cache metrics reveal hit/miss ratios.
+
+### Practical Walkthrough
+
+```java
+@Service
+public class ProductCatalogService {
+
+    @Cacheable(cacheNames = "bhopal-catalog", key = "#sku")
+    public ProductDetail fetchProduct(String sku) {
+        return productClient.fetch(sku);
+    }
+
+    @CacheEvict(cacheNames = "bhopal-catalog", key = "#sku")
+    public void invalidateProduct(String sku) { }
+}
+```
+
+```yaml
+spring:
+  cache:
+    type: redis
+    redis:
+      time-to-live: 600000
+```
+
+### Follow-Up Questions
+
+- How do you prevent cache stampede (locks, random TTL)?
+- When would you choose Caffeine over Redis?
+- How do you cache reactive pipelines effectively?
+
+---
+
+## 9. Profile-Based Configuration & Environment Management
+
+### Concept Brief
+
+Spring profiles partition application configuration by environment (`dev`, `qa`, `bhopal-prod`) or tenant. They help ship a single executable that behaves differently based on activated profiles.
+
+### Benefits
+
+- **Isolation**: Keeps secrets and region-specific wiring (Kafka, Redis endpoints) separate.
+- **Reusability**: Central `application.yaml` houses shared defaults, overlays contain overrides.
+- **Testability**: `@ActiveProfiles` enables reproducible tests.
+
+### Practical Walkthrough
+
+1. **Configuration Structure**
+   ```yaml
+   # application.yaml
+   spring:
+     datasource:
+       url: jdbc:postgresql://global-db:5432/core
+   ---
+   # application-bhopal.yaml
+   spring:
+     datasource:
+       url: jdbc:postgresql://bhopal-db:5432/core
+     kafka:
+       bootstrap-servers: bhopal-kafka-1:9092,bhopal-kafka-2:9092
+   management:
+     endpoints:
+       web:
+         exposure:
+           include: health,info,prometheus
+   ```
+2. **Profile Activation**
+   - Local run: `SPRING_PROFILES_ACTIVE=bhopal mvn spring-boot:run`
+   - Tests: `@ActiveProfiles("bhopal")`
+   - Kubernetes: set env var in deployment manifest.
+3. **Feature Flagging**
+   ```java
+   @Configuration
+   @Profile("bhopal")
+   public class BhopalSpecificConfig {
+       @Bean
+       public InventoryService inventoryService(BhopalWarehouseClient client) {
+           return new BhopalInventoryService(client);
+       }
+   }
+   ```
+
+### Follow-Up Questions
+
+- How do you prevent profile drift as more tenants are added?
+- What tooling helps manage encrypted secrets per profile?
+- How do you validate profile parity across microservices?
+
+---
+
+## 10. Spring Boot Actuator & Observability
+
+### Concept Brief
+
+Actuator exposes operational endpoints (health, metrics, info) and integrates with Micrometer for metrics export, offering deep runtime insight.
+
+### Benefits
+
+- **Operational Awareness**: Quick detection of outages (Bhopal Kafka cluster health).
+- **Traceability**: Emit business metrics (`orders.processed.bhopal`).
+- **Automation**: Health endpoints plug into Kubernetes probes.
+
+### Example: Production-Ready Actuator Setup
+
+```yaml
+management:
+  endpoints:
+    web:
+      base-path: /manage
+      exposure:
+        include: health,info,metrics,loggers,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+      group:
+        bhopal:
+          include: db,bhopal-kafka,bhopal-redis
+  metrics:
+    tags:
+      region: bhopal
+server:
+  servlet:
+    context-path: /bhopal-api
+```
+
+```java
+@Configuration
+public class MetricsConfig {
+
+    @Bean
+    public Counter ordersPlacedCounter(MeterRegistry registry) {
+        return Counter.builder("orders.placed")
+            .tag("region", "bhopal")
+            .description("Total orders placed in Bhopal")
+            .register(registry);
+    }
+}
+```
+
+### Follow-Up Questions
+
+- Which actuator endpoints stay disabled in public networks and why?
+- How do you integrate distributed tracing (Sleuth/Zipkin/OpenTelemetry)?
+- How do you secure Actuator behind API gateways?
+
+---
+
+## 11. Custom Error Handling & Exception Mapping
+
+### Concept Brief
+
+`@ControllerAdvice` centralizes error handling for consistent responses with correlation IDs and localized messages across REST APIs.
+
+### Benefits
+
+- **Consistency**: Shared schema for error responses.
+- **Debuggability**: Correlation IDs, trace references.
+- **Resilience**: Map technical exceptions to business-friendly messages.
+
+### Example
+
+```java
+@ControllerAdvice
+public class ApiErrorHandler {
+
+    @ExceptionHandler(BhopalInventoryException.class)
+    public ResponseEntity<ApiError> handleInventory(
+            BhopalInventoryException ex,
+            WebRequest request) {
+
+        ApiError error = ApiError.builder()
+            .code("BHOPAL_INV_CONFLICT")
+            .message(ex.getMessage())
+            .correlationId(request.getHeader("X-Bhopal-Correlation"))
+            .timestamp(Instant.now())
+            .build();
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you format error responses for public vs partner vs internal APIs?
+- What patterns ensure sensitive information never leaks?
+- How do you test exception flows (MockMvc, RestAssured)?
+
+---
+
+## 12. Integration with Kafka, Redis, & Mongo
+
+### Concept Brief
+
+Spring Boot offers auto-configured templates (Kafka, Redis) and repositories (Mongo) to streamline event-driven architectures and caching.
+
+### Benefits
+
+- **Rapid Wiring**: Minimal boilerplate for messaging.
+- **Consistency**: Common serializers and error handling.
+- **Resilience**: Retry, DLQ, outbox patterns reduce data loss.
+
+### Example
+
+```java
+@KafkaListener(topics = "bhopal.orders", containerFactory = "orderListenerFactory")
+@Transactional
+public void handle(OrderEvent event, Acknowledgment acknowledgment) {
+    OrderSnapshot snapshot = OrderSnapshot.from(event);
+    redisTemplate.opsForValue().set(snapshot.redisKey(), snapshot);
+    mongoTemplate.save(snapshot, "bhopal_order_snapshots");
+    acknowledgment.acknowledge();
+}
+```
+
+### Follow-Up Questions
+
+- How do you ensure idempotency during retries?
+- How do you evolve schema across Kafka, Redis, Mongo?
+- When do you prefer reactive repositories?
+
+---
+
+## 13. Spring Security with JWT & OAuth2
+
+### Concept Brief
+
+Spring Security secures APIs via JWT bearer tokens or OAuth2 resource server flows, enabling stateless authentication and granular authorization.
+
+### Benefits
+
+- **Scalability**: Stateless tokens reduce session store needs.
+- **Extensibility**: Custom claims for Bhopal tenant routing.
+- **Compliance**: Central policy enforcement.
+
+### Example
+
+```java
+@Configuration
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(authorize -> authorize
+                .requestMatchers("/bhopal/public/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/bhopal/orders/**").hasAuthority("SCOPE_read:orders")
+                .anyRequest().authenticated())
+            .oauth2ResourceServer(resource -> resource.jwt(jwt -> jwt.decoder(jwtDecoder())))
+            .build();
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you rotate signing keys seamlessly?
+- How do you secure actuator endpoints alongside APIs?
+- How do you handle multi-tenant claims in JWT?
+
+---
+
+## 14. AOP for Logging, Metrics & Cross-Cutting Concerns
+
+### Concept Brief
+
+Aspect-Oriented Programming extracts cross-cutting logic (logging, metrics, security) from business code, ensuring uniform policies.
+
+### Benefits
+
+- **Clean Code**: Business methods stay focused.
+- **Consistency**: Annotated methods follow shared patterns.
+- **Observability**: Capture metrics without scattering code.
+
+### Example
+
+```java
+@Aspect
+@Component
+public class LoggingAspect {
+
+    private final MeterRegistry meterRegistry;
+
+    public LoggingAspect(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
+    @Around("@annotation(loggableOperation)")
+    public Object logExecution(ProceedingJoinPoint joinPoint,
+                               LoggableOperation loggableOperation) throws Throwable {
+        long start = System.currentTimeMillis();
+        MDC.put("region", "Bhopal");
+        MDC.put("operation", loggableOperation.value());
+        try {
+            return joinPoint.proceed();
+        } finally {
+            long duration = System.currentTimeMillis() - start;
+            meterRegistry.timer("operation.duration", "region", "bhopal",
+                "operation", loggableOperation.value()).record(duration, TimeUnit.MILLISECONDS);
+            MDC.clear();
+        }
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When would you choose Spring AOP vs native proxies?
+- How do you avoid hiding logic that surprises developers?
+- What patterns help test aspects effectively?
+
+---
+
+## 15. Dependency Management, Autowiring & Circular Dependency Fixes
+
+### Concept Brief
+
+Spring manages object creation via IoC. Proper bean design avoids ambiguous injections and circular references.
+
+### Benefits
+
+- **Loose Coupling**: Constructor injection promotes testability.
+- **Flexibility**: Qualifiers select region-specific beans.
+- **Stability**: Avoid `BeanCurrentlyInCreationException`.
+
+### Example
+
+```java
+@Service
+public class OrderInvoicingService {
+
+    private final PaymentRouterService paymentRouterService;
+
+    public OrderInvoicingService(@Lazy PaymentRouterService paymentRouterService) {
+        this.paymentRouterService = paymentRouterService;
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When do you prefer constructor injection over field injection?
+- How do you handle multiple bean candidates without `@Primary` abuse?
+- How do you manage bean scopes for web vs batch workloads?
+
+---
+
+## 16. Building Efficient RESTful APIs & Pagination
+
+### Concept Brief
+
+REST APIs should be stateless, cache-aware, and versioned deliberately. Pagination protects backend resources and improves UX.
+
+### Benefits
+
+- **Performance**: Keyset pagination avoids offset penalties.
+- **Discoverability**: HATEOAS links guide clients.
+- **Resilience**: Rate limiting protects upstream systems.
+
+### Example
+
+```java
+public record CursorPage<T>(List<T> data, String nextCursor, boolean hasNext) { }
+```
+
+### Follow-Up Questions
+
+- How do you expose pagination metadata to mobile clients?
+- When do you choose GraphQL/gRPC over REST?
+- How do you version and deprecate REST endpoints safely?
+
+---
+
+## 17. Scheduler & Async Task Execution in Microservices
+
+### Concept Brief
+
+`@Scheduled` and `@Async` execute background jobs without blocking request threads. Pair with Quartz or message queues for cluster-safe scheduling.
+
+### Benefits
+
+- **Throughput**: Offload heavy jobs.
+- **Reliability**: Retry failed tasks, monitor queue depth.
+- **Observability**: Metrics track job latency.
+
+### Example
+
+```java
+@Scheduled(cron = "0 10 1 * * *", zone = "Asia/Kolkata")
+public void reconcileInventory() {
+    log.info("Starting Bhopal inventory reconciliation");
+    inventoryService.reconcile();
+}
+```
+
+### Follow-Up Questions
+
+- How do you monitor missed executions?
+- When do you move to Quartz, Cloud Scheduler, or Kubernetes CronJobs?
+- How do you guarantee idempotency for scheduled jobs?
+
+---
+
+## 18. Reactive Spring (WebFlux & R2DBC)
+
+### Concept Brief
+
+Spring WebFlux handles non-blocking reactive streams using Project Reactor (`Flux`, `Mono`). R2DBC provides reactive database access.
+
+### Benefits
+
+- **Scalability**: Serve more concurrent users with fewer threads.
+- **Resilience**: Backpressure prevents overload.
+- **Integration**: Stream real-time updates to Bhopal dashboards.
+
+### Practical Walkthrough
+
+```java
+@RestController
+@RequestMapping("/bhopal/shipments")
+public class ShipmentReactiveController {
+
+    private final ShipmentReactiveService service;
+
+    public ShipmentReactiveController(ShipmentReactiveService service) {
+        this.service = service;
+    }
+
+    @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ShipmentStatus> liveFeed() {
+        return service.streamStatuses();
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When do you choose WebFlux over MVC?
+- How do you manage blocking calls inside reactive pipelines?
+- What strategies ensure testing reactive flows deterministically?
+
+---
+
+## 19. Spring Cloud Config, Service Discovery & Distributed Systems
+
+### Concept Brief
+
+Spring Cloud provides distributed configuration (Config Server), service discovery (Eureka/Consul), and gateway routing.
+
+### Benefits
+
+- **Central Governance**: Manage Bhopal tenant configs from Git.
+- **Resilience**: Self-healing service registry.
+- **Security**: Configured once, consumed everywhere.
+
+### Practical Walkthrough
+
+```yaml
+spring:
+  cloud:
+    config:
+      uri: https://config.bhopal.internal
+      profile: bhopal
+```
+
+### Follow-Up Questions
+
+- How do you secure Spring Cloud Config endpoints?
+- How do you handle refresh scope and config hot-reload?
+- How do you bootstrap clients when config server is unavailable?
+
+---
+
+## 20. Native Images & Containerization (GraalVM, Buildpacks)
+
+### Concept Brief
+
+Spring Boot supports GraalVM native images and Cloud Native Buildpacks, producing lightweight, fast-starting containers.
+
+### Benefits
+
+- **Startup Speed**: Millisecond cold starts for serverless Bhopal workloads.
+- **Footprint**: Smaller memory usage on edge devices.
+- **Security**: Stripped-down runtime reduces attack surface.
+
+### Practical Walkthrough
+
+```bash
+./mvnw -Pnative native:compile
+./target/bhopal-order
+```
+
+```bash
+pack build registry.local/bhopal-order:latest --builder paketobuildpacks/builder-jammy-base
+```
+
+### Follow-Up Questions
+
+- What limitations exist when converting to native images?
+- How do you tune memory limits for buildpacks?
+- How do you embed profiling agents in native images?
+
+---
+
+## 21. Testing Strategies (Slice Tests, Testcontainers, Contract Testing)
+
+### Concept Brief
+
+Spring Boot testing tiers: unit, slice (`@WebMvcTest`, `@DataJpaTest`), integration (`@SpringBootTest`), Testcontainers, and Spring Cloud Contract.
+
+### Benefits
+
+- **Confidence**: Catch regressions before production.
+- **Speed**: Slice tests execute quickly.
+- **Contract Safety**: Consumer/provider contracts ensure compatibility.
+
+### Practical Walkthrough
+
+```java
+@WebMvcTest(OrderController.class)
+class OrderControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private OrderService orderService;
+}
+```
+
+### Follow-Up Questions
+
+- How do you balance slice vs full integration tests?
+- When do you use Testcontainers over embedded databases?
+- How do you incorporate contract tests into CI/CD?
+
+---
+
+### Quick References
+
+- **Startup**: Understand `SpringApplication` lifecycle, listeners, failure analyzers.
+- **Auto-config**: Inspect `spring.factories` / `AutoConfiguration.imports`.
+- **Properties**: Use `@ConfigurationPropertiesScan`, validate with `@Validated`.
+- **MVC**: Document APIs with Spring REST Docs/OpenAPI.
+- **Data**: Monitor `JpaRepository` performance, use `EntityGraph`.
+- **Caching**: Combine `@Cacheable` with metrics (`cache.gets`, `hits`).
+- **Security**: Leverage `SecurityFilterChain`, method security, OAuth scopes.
+- **Reactive**: Embrace backpressure (`limitRate`, `onBackpressureBuffer`).
+- **Cloud**: Pair Config Server with Vault, use circuit breakers (Resilience4j).
+- **Testing**: Layered approach—unit, slice, integration, contract, E2E.
+- **Deployment**: Package via buildpacks, configure liveness/readiness, include BOMs.
+
+This concludes the advanced Spring Boot interview pack tailored to Bhopal-focused services.\*\*\*

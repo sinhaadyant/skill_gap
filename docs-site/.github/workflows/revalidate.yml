@@ -1,0 +1,36 @@
+name: Trigger ISR Revalidation
+
+on:
+  push:
+    paths:
+      - 'content/**'
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build search index
+        run: |
+          npm install
+          npm run prebuild
+
+      - name: Call Revalidate Webhook
+        env:
+          REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
+          REVALIDATE_URL: ${{ secrets.REVALIDATE_URL }}
+        run: |
+          if [ -z "$REVALIDATE_URL" ] || [ -z "$REVALIDATE_SECRET" ]; then
+            echo "Revalidate URL or secret not configured. Skipping webhook call." && exit 0
+          fi
+          curl -X POST "$REVALIDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-revalidate-secret: $REVALIDATE_SECRET" \
+            -d '{"slugs": []}'

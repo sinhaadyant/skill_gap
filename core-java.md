@@ -1,0 +1,847 @@
+# Core Java Interview Guide
+
+---
+
+## 1. Advanced OOP Design Principles (SOLID, DRY, SRP)
+
+### Concept Brief
+
+Modern Java architecture leans on SOLID and DRY to keep classes cohesive, reusable, and adaptable. Applying these principles guards against god classes, tangled dependencies, and brittle designs.
+
+### Why It Matters
+
+- **Change Isolation**: SRP ensures Bhopal billing tweaks do not ripple into notification code.
+- **Extensibility**: Open/Closed designs accept new calculation strategies without modifying existing ones.
+- **Maintainability**: DRY shared components eliminate duplicated validation logic across services.
+
+### Practical Walkthrough
+
+```java
+public interface PricingStrategy {
+    Money calculate(LineItem item, CustomerProfile profile);
+}
+
+@Component("loyaltyPricingStrategy")
+public class LoyaltyPricingStrategy implements PricingStrategy {
+    @Override
+    public Money calculate(LineItem item, CustomerProfile profile) {
+        return item.basePrice().multiply(1 - profile.loyaltyDiscount());
+    }
+}
+
+@Component
+public class OrderPricingService {
+
+    private final Map<String, PricingStrategy> strategies;
+
+    public OrderPricingService(List<PricingStrategy> strategies) {
+        this.strategies = strategies.stream()
+            .collect(Collectors.toMap(
+                s -> s.getClass().getSimpleName(),
+                Function.identity()));
+    }
+
+    public Money price(LineItem item, CustomerProfile profile, String strategyKey) {
+        return strategies.get(strategyKey).calculate(item, profile);
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you detect SRP violations during code reviews?
+- What trade-offs appear when applying Open/Closed to fast-changing Bhopal requirements?
+- When do you favor composition over inheritance in Java modules?
+
+---
+
+## 2. Streams API (Parallel Streams, Collectors, Grouping)
+
+### Concept Brief
+
+Streams enable declarative data processing pipelines. Parallel streams leverage the Fork/Join pool to distribute heavy computations across cores—ideal for CPU intensive aggregation.
+
+### Why It Matters
+
+- **Expressiveness**: Complex transformations collapse into concise pipelines.
+- **Performance**: Parallelism accelerates large dataset processing if the workload is CPU-bound.
+- **Safety**: Controlled immutability and side-effect management keep concurrency defects at bay.
+
+### Practical Walkthrough
+
+```java
+public class BhopalSalesAnalytics {
+
+    public Map<Zone, LoyaltySummary> summarizeDailySales(List<SalesRecord> records) {
+        return records.parallelStream()
+            .filter(record -> record.location().region().equals("Bhopal"))
+            .collect(Collectors.groupingBy(
+                SalesRecord::zone,
+                Collectors.collectingAndThen(
+                    Collectors.toList(),
+                    LoyaltySummary::fromRecords)));
+    }
+}
+
+public record LoyaltySummary(BigDecimal total, long goldCount) {
+    static LoyaltySummary fromRecords(List<SalesRecord> records) {
+        BigDecimal total = records.stream()
+            .map(SalesRecord::amount)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        long gold = records.stream().filter(r -> r.customerTier() == Tier.GOLD).count();
+        return new LoyaltySummary(total, gold);
+    }
+}
+```
+
+### Follow-Up Questions
+
+- What heuristics help you choose between `parallelStream()` and `CompletableFuture`?
+- How do you debug performance regressions caused by parallel streams?
+- When do you inject custom `ForkJoinPool` instances for isolation?
+
+---
+
+## 3. Functional Interfaces & Lambda Best Practices
+
+### Concept Brief
+
+Functional interfaces (one abstract method) unlock lambda expressions and method references. They power clean, expressive business rules when paired with thoughtful design.
+
+### Why It Matters
+
+- **Modularity**: Strategy-like behavior is passed as data.
+- **Testability**: Lambdas bound to interfaces can be mocked or replaced in tests.
+- **Readability**: Method references document intent (`Customer::isPreferred`).
+
+### Practical Walkthrough
+
+```java
+@FunctionalInterface
+public interface LoyaltyRule extends Predicate<CustomerContext> {
+    default LoyaltyRule and(LoyaltyRule other) {
+        return context -> this.test(context) && other.test(context);
+    }
+}
+
+public class LoyaltyEngine {
+
+    private final List<LoyaltyRule> rules;
+
+    public LoyaltyEngine(List<LoyaltyRule> rules) {
+        this.rules = rules;
+    }
+
+    public boolean qualifies(CustomerContext context) {
+        return rules.stream().allMatch(rule -> rule.test(context));
+    }
+}
+
+LoyaltyRule spendsThreshold = ctx -> ctx.yearToDateSpends().compareTo(new BigDecimal("50000")) >= 0;
+LoyaltyRule bhopalZone = ctx -> "Bhopal".equals(ctx.zone());
+LoyaltyRule recentActivity = ctx -> ctx.lastPurchase().isAfter(LocalDate.now().minusMonths(3));
+
+LoyaltyEngine engine = new LoyaltyEngine(List.of(
+    spendsThreshold.and(bhopalZone).and(recentActivity)
+));
+```
+
+### Follow-Up Questions
+
+- How do you keep lambdas testable when business logic grows complex?
+- When would you replace a lambda with a dedicated class?
+- What pitfalls arise when capturing mutable state inside lambdas?
+
+---
+
+## 4. Concurrency & Multi-Threading (ExecutorService, CompletableFuture)
+
+### Concept Brief
+
+Java’s `ExecutorService` orchestrates thread pools, while `CompletableFuture` composes asynchronous workflows without blocking.
+
+### Why It Matters
+
+- **Scalability**: Offload slow I/O (shipping APIs, payment gateways) from request threads.
+- **Resilience**: Timeouts and fallbacks manage unpredictable downstream latency.
+- **Clarity**: Declarative async pipelines reduce callback hell.
+
+### Practical Walkthrough
+
+```java
+public class ShipmentAggregator {
+
+    private final ExecutorService executor = Executors.newFixedThreadPool(20);
+    private final CarrierClient carrierClient;
+    private final WarehouseClient warehouseClient;
+
+    public ShipmentAggregator(CarrierClient carrierClient, WarehouseClient warehouseClient) {
+        this.carrierClient = carrierClient;
+        this.warehouseClient = warehouseClient;
+    }
+
+    public CompletableFuture<ShipmentStatus> aggregate(String orderId) {
+        CompletableFuture<CarrierStatus> carrierFuture =
+            CompletableFuture.supplyAsync(() -> carrierClient.track(orderId), executor);
+
+        CompletableFuture<WarehouseStatus> warehouseFuture =
+            CompletableFuture.supplyAsync(() -> warehouseClient.status(orderId), executor);
+
+        return carrierFuture.thenCombine(warehouseFuture, ShipmentStatus::merge)
+            .orTimeout(5, TimeUnit.SECONDS)
+            .exceptionally(ex -> ShipmentStatus.fallback(orderId, ex));
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When should you replace `ForkJoinPool.commonPool()` with a dedicated executor?
+- How do you propagate MDC/ThreadLocal context across async boundaries?
+- What is your backpressure strategy when futures pile up?
+
+---
+
+## 5. Memory Management & Garbage Collection Tuning
+
+### Concept Brief
+
+Effective GC tuning keeps latency predictable. Choose collectors (G1, ZGC) and JVM flags to match Bhopal workloads, monitoring live metrics for adaptive tuning.
+
+### Why It Matters
+
+- **Latency Guarantees**: Keep pause times below SLA during invoice batches.
+- **Cost Control**: Right-size heap to avoid overprovisioned cloud nodes.
+- **Diagnostics**: Heap dumps reveal leaks before production degradation.
+
+### Practical Walkthrough
+
+```text
+# Bhopal production JVM flags
+-Xms4g
+-Xmx4g
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=150
+-XX:+UnlockDiagnosticVMOptions
+-XX:+G1SummarizeConcMark
+-XX:+PrintGCDetails
+-XX:+PrintGCDateStamps
+-Xlog:gc*:/var/log/bhopal-api/gc.log
+```
+
+```java
+public class HeapPressureSimulator {
+    private static final List<byte[]> pressure = new ArrayList<>();
+
+    public static void main(String[] args) throws InterruptedException {
+        while (true) {
+            pressure.add(new byte[10_000_000]);
+            Thread.sleep(1000);
+        }
+    }
+}
+```
+
+### Follow-Up Questions
+
+- What indicators convince you to switch from G1 to ZGC?
+- How do you monitor GC pressure in Grafana or JDK Flight Recorder?
+- How do you diagnose `OutOfMemoryError` in a Bhopal microservice?
+
+---
+
+## 6. Exception Handling Frameworks & Custom Exceptions
+
+### Concept Brief
+
+Intentional exception hierarchies combined with frameworks (Dropwizard Metrics, Spring `@ControllerAdvice`) keep error handling predictable and observable.
+
+### Why It Matters
+
+- **Clarity**: Domain-specific exceptions communicate business context.
+- **Consistency**: Centralized handlers deliver uniform responses.
+- **Recovery**: Retry logic distinguishes transient vs fatal exceptions.
+
+### Practical Walkthrough
+
+```java
+public sealed class BhopalInventoryException extends RuntimeException
+    permits InventoryNotFoundException, InventoryReservationException {
+
+    public BhopalInventoryException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+public final class InventoryReservationException extends BhopalInventoryException {
+    public InventoryReservationException(String orderId, Throwable cause) {
+        super("Reservation failed for order " + orderId, cause);
+    }
+}
+
+@Aspect
+@Component
+public class ExceptionMetricsAspect {
+
+    private final Counter reservationFailures;
+
+    public ExceptionMetricsAspect(MeterRegistry registry) {
+        this.reservationFailures = registry.counter("inventory.reservation.failures", "region", "bhopal");
+    }
+
+    @AfterThrowing(pointcut = "execution(* ..InventoryService.reserve(..))",
+        throwing = "ex")
+    public void logReservationFailure(BhopalInventoryException ex) {
+        reservationFailures.increment();
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you avoid overusing checked exceptions in service layers?
+- What is your retry policy for transient infrastructure failures?
+- How do you propagate error codes across distributed systems?
+
+---
+
+## 7. Java 8–17 Features (Records, Sealed Classes, Switch Expressions)
+
+### Concept Brief
+
+Modern Java releases deliver features that simplify domain modeling and pattern matching: `record`, sealed types, and enhanced switch expressions among others.
+
+### Why It Matters
+
+- **Brevity**: Records remove boilerplate while remaining immutable.
+- **Type Safety**: Sealed hierarchies restrict subtypes for exhaustive handling.
+- **Expressiveness**: Pattern matching switch clarifies conditional logic.
+
+### Practical Walkthrough
+
+```java
+public sealed interface LoyaltyBenefit permits PercentageDiscount, FreeDelivery, BonusPoints { }
+
+public record PercentageDiscount(BigDecimal percent) implements LoyaltyBenefit { }
+public record FreeDelivery(BigDecimal minimumAmount) implements LoyaltyBenefit { }
+public record BonusPoints(int points) implements LoyaltyBenefit { }
+
+public class BenefitFormatter {
+
+    public String format(LoyaltyBenefit benefit) {
+        return switch (benefit) {
+            case PercentageDiscount discount -> "Apply " + discount.percent() + " off";
+            case FreeDelivery delivery -> "Free delivery above ₹" + delivery.minimumAmount();
+            case BonusPoints points -> points.points() + " bonus points credited";
+        };
+    }
+}
+```
+
+### Follow-Up Questions
+
+- What migration hurdles appear when legacy frameworks expect JavaBeans instead of records?
+- How do sealed classes aid you in exhaustive switch statements?
+- Which Java 17 language features are hardest to adopt in legacy Bhopal services?
+
+---
+
+## 8. Performance Optimization & Profiling with VisualVM
+
+### Concept Brief
+
+VisualVM, JFR, and similar profilers capture CPU, memory, and thread metrics, helping teams target optimization efforts with evidence.
+
+### Why It Matters
+
+- **Precision**: Identify hot methods before rewriting large modules.
+- **Stability**: Spot deadlocks or thread starvation before customer impact.
+- **Feedback**: Compare before/after metrics to validate optimizations.
+
+### Practical Walkthrough
+
+1. Attach VisualVM or JFR to the running Bhopal API pod.
+2. Capture CPU sampling during peak hours.
+3. Drill down to expensive methods (e.g., DTO mapping).
+4. Optimize using caching or stream rewrites.
+
+```java
+public class CustomerMapper {
+
+    private final LoadingCache<String, CustomerDto> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(15))
+        .build(this::mapInternal);
+
+    public CustomerDto map(CustomerEntity entity) {
+        return cache.get(entity.getId());
+    }
+
+    private CustomerDto mapInternal(String id) {
+        // heavy mapping logic
+    }
+}
+```
+
+### Follow-Up Questions
+
+- How do you ensure an optimization doesn’t break functionality?
+- What metrics do you monitor post-deployment to confirm improvement?
+- When do you choose async processing vs. optimizing synchronous flow?
+
+---
+
+## 9. OOP Pillars Deep Dive (Encapsulation, Inheritance, Polymorphism, Abstraction)
+
+### Concept Brief
+
+The four OOP pillars form the foundation for modeling real-world problems. Mastery goes beyond definitions—understand trade-offs, extensibility, and testability.
+
+### Why It Matters
+
+- **Flexibility**: Choose inheritance vs composition consciously in Bhopal domains.
+- **Reuse**: Polymorphism reduces branching logic.
+- **Safety**: Encapsulation protects invariants, abstraction hides risky implementation details.
+
+### Practical Walkthrough
+
+```java
+public abstract class Shipment {
+    protected final String orderId;
+
+    protected Shipment(String orderId) {
+        this.orderId = orderId;
+    }
+
+    public abstract Duration eta();
+}
+
+public final class AirShipment extends Shipment {
+    private final Duration flightTime;
+
+    public AirShipment(String orderId, Duration flightTime) {
+        super(orderId);
+        this.flightTime = flightTime;
+    }
+
+    @Override
+    public Duration eta() {
+        return flightTime.plusHours(4); // handling time
+    }
+}
+
+public final class RoadShipment extends Shipment {
+    private final Distance distance;
+    private final Speed averageSpeed;
+
+    public RoadShipment(String orderId, Distance distance, Speed averageSpeed) {
+        super(orderId);
+        this.distance = distance;
+        this.averageSpeed = averageSpeed;
+    }
+
+    @Override
+    public Duration eta() {
+        return distance.divide(averageSpeed).plusHours(2);
+    }
+}
+
+public class ShipmentTracker {
+    public Duration estimate(Shipment shipment) {
+        return shipment.eta();
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When do you replace inheritance hierarchies with composition?
+- How do you enforce encapsulation when multiple modules need privileged access?
+- How do you document abstraction contracts to avoid Liskov violations?
+
+---
+
+## 10. Design Patterns (Creational, Structural, Behavioral)
+
+### Concept Brief
+
+Gang of Four patterns provide proven solutions to recurring design problems. Adapt them to modern Java features (records, functional interfaces).
+
+### Why It Matters
+
+- **Maintainability**: Patterns create shared vocabulary for Bhopal teams.
+- **Extensibility**: Strategy, Factory, and Builder ease future enhancements.
+- **Testability**: Observer and Mediator decouple components for isolated testing.
+
+### Practical Walkthrough
+
+```java
+// Strategy pattern with functional interface
+@FunctionalInterface
+public interface DiscountStrategy {
+    Money apply(Money base);
+}
+
+public class DiscountRegistry {
+    private final Map<String, DiscountStrategy> strategies = Map.of(
+        "festival", base -> base.multiply(0.85),
+        "loyalty", base -> base.subtract(new Money("150"))
+    );
+
+    public Money apply(String code, Money base) {
+        return strategies.getOrDefault(code, Money::identity).apply(base);
+    }
+}
+
+// Builder pattern with records
+public record Order(
+    String id,
+    Customer customer,
+    List<OrderLine> lines,
+    PaymentMethod paymentMethod) {
+
+    public static Builder builder() { return new Builder(); }
+
+    public static class Builder {
+        private String id;
+        private Customer customer;
+        private final List<OrderLine> lines = new ArrayList<>();
+        private PaymentMethod paymentMethod;
+
+        public Builder id(String id) { this.id = id; return this; }
+        public Builder customer(Customer customer) { this.customer = customer; return this; }
+        public Builder addLine(OrderLine line) { this.lines.add(line); return this; }
+        public Builder paymentMethod(PaymentMethod method) { this.paymentMethod = method; return this; }
+        public Order build() { return new Order(id, customer, List.copyOf(lines), paymentMethod); }
+    }
+}
+```
+
+### Follow-Up Questions
+
+- Which patterns do you avoid in modern Java due to language evolution?
+- How do you prevent overengineering when introducing patterns?
+- When do you combine patterns (e.g., Factory + Strategy) in large systems?
+
+---
+
+## 11. Java Collections Framework & Performance
+
+### Concept Brief
+
+Collections underpin most business logic; picking the right structure impacts latency and memory usage.
+
+### Why It Matters
+
+- **Performance**: Choose `ArrayDeque` over `LinkedList` for queue behavior.
+- **Correctness**: Understand ordering guarantees (`LinkedHashMap` vs `HashMap`).
+- **Concurrency**: Use `ConcurrentHashMap` with appropriate compute methods.
+
+### Practical Walkthrough
+
+```java
+Map<String, Order> ordersById = new HashMap<>();
+List<Order> topOrders = new ArrayList<>();
+Deque<Event> events = new ArrayDeque<>();
+
+// Stream + collector for grouping
+Map<Zone, List<Order>> byZone = orders.stream()
+    .collect(Collectors.groupingBy(Order::zone, LinkedHashMap::new, Collectors.toList()));
+
+// Concurrent updates
+ConcurrentMap<String, AtomicInteger> retryCounts = new ConcurrentHashMap<>();
+retryCounts.computeIfAbsent(orderId, key -> new AtomicInteger()).incrementAndGet();
+```
+
+### Follow-Up Questions
+
+- How do you decide between `CopyOnWriteArrayList` and synchronized lists?
+- What are pitfalls of using `SubList` views?
+- How do you avoid autoboxing overhead in high-volume collections?
+
+---
+
+## 12. Generics, Type Erasure, & Advanced Type Bounds
+
+### Concept Brief
+
+Generics provide compile-time type safety. Understand wildcards, bounds, and type erasure limitations.
+
+### Why It Matters
+
+- **Safety**: Avoid raw types and unchecked casts.
+- **Reusability**: Generic utilities reduce duplicate code in Bhopal microservices.
+- **Interoperability**: Write APIs that accept flexible yet safe types.
+
+### Practical Walkthrough
+
+```java
+public final class RetryExecutor<T> {
+
+    private final Supplier<T> supplier;
+    private final Predicate<Throwable> retryOn;
+
+    public RetryExecutor(Supplier<T> supplier, Predicate<Throwable> retryOn) {
+        this.supplier = supplier;
+        this.retryOn = retryOn;
+    }
+
+    public T execute(int attempts) {
+        List<Throwable> failures = new ArrayList<>();
+        for (int i = 0; i < attempts; i++) {
+            try {
+                return supplier.get();
+            } catch (Throwable t) {
+                if (!retryOn.test(t)) throw t;
+                failures.add(t);
+            }
+        }
+        throw new AggregateException(failures);
+    }
+}
+
+public <T extends Comparable<? super T>> T max(Collection<T> values) {
+    return values.stream().max(Comparator.naturalOrder())
+        .orElseThrow(() -> new IllegalArgumentException("Empty collection"));
+}
+```
+
+### Follow-Up Questions
+
+- How does type erasure impact reflection and serialization?
+- When do you use `? extends` vs `? super` in API design?
+- How do you handle generic arrays safely?
+
+---
+
+## 13. Reflection, Annotations, & Dynamic Proxies
+
+### Concept Brief
+
+Reflection inspects and modifies classes at runtime. Annotations encode metadata. Dynamic proxies enable cross-cutting behaviors (logging, caching).
+
+### Why It Matters
+
+- **Framework Development**: Build custom DI containers or instrumentation for Bhopal services.
+- **Meta-programming**: Implement annotation-driven validators.
+- **Integration**: Wrap legacy services with dynamic proxies for monitoring.
+
+### Practical Walkthrough
+
+```java
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface BhopalController {
+    String value();
+}
+
+public class AnnotationScanner {
+    public List<Class<?>> scan(String basePackage) {
+        // use ClassGraph or Spring's ClassPath scanning
+    }
+}
+
+InvocationHandler handler = (proxy, method, args) -> {
+    long start = System.currentTimeMillis();
+    try {
+        return method.invoke(target, args);
+    } finally {
+        log.info("Method {} took {} ms", method.getName(), System.currentTimeMillis() - start);
+    }
+};
+Service proxy = (Service) Proxy.newProxyInstance(
+    Service.class.getClassLoader(),
+    new Class<?>[]{Service.class},
+    handler);
+```
+
+### Follow-Up Questions
+
+- How do you mitigate reflection performance overhead?
+- What security considerations arise when using reflection?
+- When would you choose ByteBuddy or ASM over JDK proxies?
+
+---
+
+## 14. JVM Internals & Class Loading
+
+### Concept Brief
+
+Understand how the JVM loads, verifies, and initializes classes. Class loaders form hierarchies for isolation and hot swapping.
+
+### Why It Matters
+
+- **Debugging**: Diagnose `ClassNotFoundException` or classpath issues.
+- **Modularity**: Load plugins dynamically for Bhopal platforms.
+- **Optimization**: Understand just-in-time compilation behavior.
+
+### Practical Walkthrough
+
+```java
+ClassLoader appLoader = Thread.currentThread().getContextClassLoader();
+Class<?> driverClass = appLoader.loadClass("org.postgresql.Driver");
+
+URL[] pluginUrls = { new URL("file:/opt/bhopal/plugins/loyalty.jar") };
+URLClassLoader pluginLoader = new URLClassLoader(pluginUrls, appLoader);
+Class<?> loyaltyClass = pluginLoader.loadClass("com.bhopal.loyalty.Engine");
+Object engine = loyaltyClass.getDeclaredConstructor().newInstance();
+```
+
+### Follow-Up Questions
+
+- How does the JVM verify bytecode during class loading?
+- What is the parent delegation model and when would you break it?
+- How do you debug classpath conflicts in complex deployments?
+
+---
+
+## 15. Java Memory Model & Synchronization Primitives
+
+### Concept Brief
+
+The Java Memory Model defines visibility and ordering guarantees. Synchronization primitives include `synchronized`, `volatile`, `Lock`, `StampedLock`, and atomics.
+
+### Why It Matters
+
+- **Correctness**: Avoid race conditions in Bhopal concurrency workloads.
+- **Performance**: Choose non-blocking structures when needed.
+- **Safety**: Understand happens-before relationships for multi-threading.
+
+### Practical Walkthrough
+
+```java
+public class InventoryCounter {
+    private final AtomicInteger count = new AtomicInteger();
+
+    public int increment() {
+        return count.incrementAndGet();
+    }
+}
+
+public class ShipmentCache {
+    private final Map<String, Shipment> cache = new HashMap<>();
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
+    public Shipment get(String orderId, Supplier<Shipment> loader) {
+        lock.readLock().lock();
+        try {
+            Shipment shipment = cache.get(orderId);
+            if (shipment != null) return shipment;
+        } finally {
+            lock.readLock().unlock();
+        }
+        lock.writeLock().lock();
+        try {
+            return cache.computeIfAbsent(orderId, key -> loader.get());
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+}
+```
+
+### Follow-Up Questions
+
+- When is `volatile` sufficient without full synchronization?
+- How do you detect and resolve livelocks or starvation?
+- Why might you choose `StampedLock` or `LongAdder` in high contention scenarios?
+
+---
+
+## 16. Serialization, Externalization, & JSON Mapping
+
+### Concept Brief
+
+Serialization converts objects to byte streams; externalization gives explicit control. JSON mapping frameworks (Jackson, Gson) require versioning strategies.
+
+### Why It Matters
+
+- **Backward Compatibility**: Preserve contracts for Bhopal APIs.
+- **Security**: Prevent deserialization vulnerabilities.
+- **Performance**: Optimize payload sizes and serialization cost.
+
+### Practical Walkthrough
+
+```java
+public class LoyaltySnapshot implements Externalizable {
+    private String customerId;
+    private int points;
+
+    @Override
+    public void writeExternal(ObjectOutput out) throws IOException {
+        out.writeUTF(customerId);
+        out.writeInt(points);
+    }
+
+    @Override
+    public void readExternal(ObjectInput in) throws IOException {
+        this.customerId = in.readUTF();
+        this.points = in.readInt();
+    }
+}
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record OrderPayload(
+    @JsonProperty("order_id") String orderId,
+    @JsonProperty("region") String region) { }
+```
+
+### Follow-Up Questions
+
+- How do you version serialized objects safely?
+- What mitigations prevent insecure deserialization (allow list, sealed classes)?
+- How do you handle polymorphic JSON payloads in Jackson?
+
+---
+
+## 17. Java Module System (JPMS) & Modularity
+
+### Concept Brief
+
+JPMS (Java 9+) modularizes applications via `module-info.java`, defining exports and dependencies. It improves encapsulation and startup performance.
+
+### Why It Matters
+
+- **Encapsulation**: Hide internal packages from consumers.
+- **Startup**: Smaller runtime images for Bhopal edge deployments via `jlink`.
+- **Security**: Prevent reflective access to non-exported packages.
+
+### Practical Walkthrough
+
+```java
+module com.bhopal.orders {
+    requires spring.context;
+    requires java.sql;
+    exports com.bhopal.orders.api;
+    opens com.bhopal.orders.config to spring.core;
+}
+```
+
+```bash
+jlink --module-path $JAVA_HOME/jmods:target/modules \
+      --add-modules com.bhopal.orders \
+      --output bhopal-runtime
+```
+
+### Follow-Up Questions
+
+- What challenges arise when migrating from classpath to module path?
+- How do automatic modules assist during incremental adoption?
+- When do you prefer fat jars over modular runtime images?
+
+---
+
+### Quick References
+
+- **OOP essentials**: Prefer composition, document inheritance contracts, validate LSP.
+- **Design patterns**: Start simple, refactor toward Strategy/Builder/Observer as use cases grow.
+- **Collections**: Benchmark data structures with realistic workloads before settling.
+- **Generics**: Use bounded wildcards, avoid raw types, understand erasure limits.
+- **Reflection**: Cache lookups, restrict access, validate inputs.
+- **Concurrency guardrails**: Bounded executors, timeouts, circuit breakers.
+- **GC monitoring**: `gc.overhead` Grafana dashboards, heap dumps with Eclipse MAT.
+- **Modern Java**: Adopt JEPs incrementally, leverage `var` judiciously.
+- **Profiling cadence**: Baseline monthly, after major releases, and during performance incidents.
+- **Modularity**: Keep module graphs small, use `jlink` for lightweight distributions.
+
+This concludes the Core Java interview pack tuned for Bhopal enterprise services.\*\*\*
